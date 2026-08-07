@@ -10,9 +10,9 @@ env:
   - name: PAPER_STARTING_CASH
     value: "100000"
   - name: MASSIVE_SECRET_SCOPE
-    value: "database"
+    value: "massive"
   - name: MASSIVE_SECRET_KEY
-    value: "massive-api-key"
+    value: "api-key"
   - name: ALPACA_SECRET_SCOPE
     value: "database"
   - name: ALPACA_KEY_ID_SECRET_KEY

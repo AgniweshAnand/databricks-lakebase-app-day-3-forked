@@ -1,39 +1,51 @@
 """
-One-time script to create the secret scope and store the Lakebase
-connection URL, following the same pattern as Day 2's setup_secrets.py.
+One-time setup script: creates the Databricks secret scope and stores the
+Massive API key. Run this locally (with the Databricks CLI configured) or
+from a notebook - never commit the resulting secret value anywhere.
 
-Run once from a Databricks notebook in your workspace:
-    %sh python setup_secrets.py
+Usage:
+    python setup_secrets.py
 """
-
-import base64
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service import workspace
 import getpass
 
-from databricks.sdk import WorkspaceClient
+w = WorkspaceClient()
 
-SCOPE = "database"
-KEY = "lakebase-url"
+w.secrets.create_scope(scope="massive")
+w.secrets.put_secret(
+    scope="massive",
+    key="api-key",
+    string_value=getpass.getpass("Paste your Massive API key: ")
+)
 
+w.secrets.create_scope(scope="database")
+w.secrets.put_secret(
+    scope="database",
+    key="alpaca-key-id",
+    string_value=getpass.getpass("Paste your key id ")
+)
 
-def main():
-    w = WorkspaceClient()
+w.secrets.put_secret(
+    scope="database",
+    key="alpaca-secret-key",
+    string_value=getpass.getpass("Paste secret key ")
+)
 
-    existing_scopes = {s.name for s in w.secrets.list_scopes()}
-    if SCOPE not in existing_scopes:
-        w.secrets.create_scope(scope=SCOPE)
-        print(f"Created secret scope: {SCOPE}")
+w.secrets.put_secret(
+    scope="database",
+    key="lakebase-url",
+    string_value=getpass.getpass("Paste your lakebase url")
+)
 
-    lakebase_url = getpass.getpass(
-        "Paste your Lakebase connection URL "
-        "(postgresql://role:password@host:5432/databricks_postgres?sslmode=require): "
-    ).strip()
-    if not lakebase_url:
-        raise SystemExit("No Lakebase URL provided - aborting.")
+w.secrets.put_acl(
+    scope="database",
+    principal="users",
+    permission=workspace.AclPermission.READ,
+)
 
-    encoded = base64.b64encode(lakebase_url.encode("utf-8")).decode("utf-8")
-    w.secrets.put_secret(scope=SCOPE, key=KEY, string_value=encoded)
-    print(f"Stored secret: {SCOPE}/{KEY}")
-
-
-if __name__ == "__main__":
-    main()
+w.secrets.put_acl(
+    scope="massive",
+    principal="users",
+    permission=workspace.AclPermission.READ,
+)

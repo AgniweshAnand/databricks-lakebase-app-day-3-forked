@@ -5,3 +5,4 @@ fastmcp>=2.3.0
 python-dotenv>=1.0.1
 requests>=2.31.0
 alpaca-py>=0.33.0
+sentence-transformers>=2.2.0
