@@ -9,3 +9,9 @@ env:
     value: "lakebase-url"
   - name: PAPER_ACCOUNT_ID
     value: "agent-bricks-demo"
+  - name: ALPACA_SECRET_SCOPE
+    value: "database"
+  - name: ALPACA_KEY_ID_SECRET_KEY
+    value: "alpaca-key-id"
+  - name: ALPACA_SECRET_KEY_SECRET_KEY
+    value: "alpaca-secret-key"

@@ -1,18 +1,17 @@
 """
-Paper-trading engine backing the "thinkorswim" mock MCP server.
+Legacy simulated paper-trading engine (superseded by alpaca_broker.py).
+
+Kept for reference/fallback only - it is no longer imported by
+alpaca_mcp_server.py or dashboard/app.py, which now use Alpaca Markets'
+real, hosted paper-trading account instead.
 
 All state (accounts, positions, orders, simulated market prices) lives in
 Lakebase (Databricks-managed Postgres), via lakebase.py - same connection
-pattern as Day 2. This module has NO knowledge of MCP or Flask; both
-tos_mcp_server.py (the MCP tool server) and dashboard/app.py (the Flask UI)
-import it, so trades placed via an Agent Bricks agent through MCP show up
-immediately in the dashboard and vice versa.
+pattern as Day 2. This module has NO knowledge of MCP or Flask.
 
-There is no real brokerage connection here - "thinkorswim" is mocked:
-prices are a seeded random walk stored in `paper_market_prices`, and orders
-just move fake cash/shares around in Lakebase. This is intentional: it lets
-students wire an Agent Bricks agent to an MCP server and watch it "trade"
-without any real money, real brokerage account, or real market-data key.
+There is no real brokerage connection here: prices are a seeded random
+walk stored in `paper_market_prices`, and orders just move fake
+cash/shares around in Lakebase.
 """
 
 import os
@@ -95,7 +94,7 @@ def get_quote(symbol: str) -> dict:
     Return a simulated quote for `symbol`. If the symbol has never been
     quoted before, seed it with a deterministic base price and nudge it
     with a small random walk on every call (a stand-in for a live
-    thinkorswim/market-data feed - see the README for wiring in a real
+    live market-data feed - see the README for wiring in a real
     quote source instead).
     """
     ensure_tables()

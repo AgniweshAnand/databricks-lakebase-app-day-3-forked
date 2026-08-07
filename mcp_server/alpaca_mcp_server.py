@@ -1,5 +1,5 @@
 """
-Mock "thinkorswim" MCP server.
+Alpaca Markets paper-trading MCP server.
 
 Exposes paper-trading tools over MCP (Model Context Protocol) so a
 Databricks Agent Bricks agent can call them like any other tool:
@@ -9,17 +9,18 @@ Databricks Agent Bricks agent can call them like any other tool:
     - get_account_summary(account_id)
     - get_order_history(account_id, limit)
 
-There is no real Charles Schwab/thinkorswim API connection here - as of
-this writing there's no official public thinkorswim MCP server. This mocks
-the shape of one (quote/trade/positions/orders) with a Lakebase-backed
-paper-trading engine (see paper_broker.py), so students can safely wire an
-Agent Bricks agent to "make fake trades" without a real brokerage account,
-real market-data key, or risk of real money moving.
+These tools are backed by Alpaca Markets' real, hosted paper-trading
+account (see alpaca_broker.py), so students can safely wire an Agent
+Bricks agent to place real (but fake-money) trades without a real
+brokerage account or risk of real money moving. account_id is accepted
+for signature compatibility but is not used to select an account - Alpaca
+paper trading is one account per API key pair.
 
-Swap-in-a-real-broker note: to point this at a real (paper or live) broker
-API instead, keep the same 5 tool signatures below and replace the
-paper_broker.* calls inside each tool with calls to that broker's SDK/API -
-the MCP surface for the agent does not need to change.
+Swap-in-a-real-broker note: to point this at a different broker instead,
+keep the same 5 tool signatures below and replace the alpaca_broker.*
+calls inside each tool with calls to that broker's SDK/API - the MCP
+surface for the agent does not need to change. The original Lakebase-
+simulated engine is preserved in paper_broker.py for reference.
 
 Deploy this as its own Databricks App (same app.yaml + FastMCP entrypoint
 pattern documented at
@@ -28,22 +29,22 @@ from the dashboard app, so an Agent Bricks agent (or any MCP client) can
 register its URL as an external MCP server.
 
 Run locally:
-    python tos_mcp_server.py
+    python alpaca_mcp_server.py
 """
 
 import os
 
 from fastmcp import FastMCP
 
-import paper_broker
+import alpaca_broker
 
-mcp = FastMCP("thinkorswim-paper-trading")
+mcp = FastMCP("alpaca-paper-trading")
 
 
 @mcp.tool
 def get_quote(symbol: str) -> dict:
     """
-    Get the latest simulated quote for a stock ticker symbol.
+    Get the latest real quote for a stock ticker symbol from Alpaca.
 
     Args:
         symbol: Stock ticker symbol, e.g. "AAPL".
@@ -51,76 +52,78 @@ def get_quote(symbol: str) -> dict:
     Returns:
         A dict with symbol, price, and as_of (ISO timestamp).
     """
-    return paper_broker.get_quote(symbol)
+    return alpaca_broker.get_quote(symbol)
 
 
 @mcp.tool
 def place_trade(account_id: str, symbol: str, side: str, quantity: float) -> dict:
     """
-    Place a fake market order (paper trade) - BUY or SELL - against a paper
-    trading account. Fills instantly at the current simulated quote price.
-    Rejects BUYs that would exceed available paper cash, and SELLs larger
-    than the current position.
+    Place a real market order (paper trade) - BUY or SELL - against the
+    configured Alpaca paper trading account.
 
     Args:
-        account_id: Paper trading account identifier (any string; created
-            automatically on first use with a default starting cash balance).
+        account_id: Accepted for signature compatibility; not used to
+            select an account (Alpaca paper trading is one account per
+            API key pair).
         symbol: Stock ticker symbol, e.g. "AAPL".
         side: "BUY" or "SELL".
         quantity: Number of shares to trade (must be positive).
 
     Returns:
-        A dict describing the filled order (id, symbol, side, quantity,
+        A dict describing the order (id, symbol, side, quantity,
         price, notional, status, created_at).
     """
-    return paper_broker.place_order(account_id, symbol, side, quantity)
+    return alpaca_broker.place_order(account_id, symbol, side, quantity)
 
 
 @mcp.tool
 def get_positions(account_id: str) -> list[dict]:
     """
-    Get all open positions for a paper trading account.
+    Get all open positions for the Alpaca paper trading account.
 
     Args:
-        account_id: Paper trading account identifier.
+        account_id: Accepted for signature compatibility; not used to
+            select an account.
 
     Returns:
         A list of dicts, each with symbol, quantity, avg_cost, updated_at.
     """
-    return paper_broker.get_positions(account_id)
+    return alpaca_broker.get_positions(account_id)
 
 
 @mcp.tool
 def get_account_summary(account_id: str) -> dict:
     """
-    Get a full account summary for a paper trading account: cash balance,
-    open positions marked-to-market, total market value, and total equity
-    (cash + market value).
+    Get a full account summary for the Alpaca paper trading account: cash
+    balance, open positions marked-to-market, total market value, and
+    total equity (cash + market value).
 
     Args:
-        account_id: Paper trading account identifier.
+        account_id: Accepted for signature compatibility; not used to
+            select an account.
 
     Returns:
         A dict with account_id, cash_balance, positions, market_value,
         total_equity.
     """
-    return paper_broker.get_account_summary(account_id)
+    return alpaca_broker.get_account_summary(account_id)
 
 
 @mcp.tool
 def get_order_history(account_id: str, limit: int = 50) -> list[dict]:
     """
-    Get recent filled orders for a paper trading account, most recent first.
+    Get recent orders for the Alpaca paper trading account, most recent first.
 
     Args:
-        account_id: Paper trading account identifier.
+        account_id: Accepted for signature compatibility; not used to
+            select an account.
         limit: Max number of orders to return (default 50).
 
     Returns:
         A list of dicts, each with id, symbol, side, quantity, price,
         notional, status, created_at.
     """
-    return paper_broker.get_order_history(account_id, limit)
+    return alpaca_broker.get_order_history(account_id, limit)
 
 
 if __name__ == "__main__":

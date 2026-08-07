@@ -1,23 +1,26 @@
 """
-Paper-trading engine backing the "thinkorswim" mock MCP server.
+Legacy simulated paper-trading engine (superseded by alpaca_broker.py).
+
+Kept for reference/fallback only - it is no longer imported by
+alpaca_mcp_server.py or dashboard/app.py, which now use Alpaca Markets'
+real, hosted paper-trading account instead.
 
 All state (accounts, positions, orders, simulated market prices) lives in
 Lakebase (Databricks-managed Postgres), via lakebase.py - same connection
-pattern as Day 2. This module has NO knowledge of MCP or Flask; both
-tos_mcp_server.py (the MCP tool server) and dashboard/app.py (the Flask UI)
-import it, so trades placed via an Agent Bricks agent through MCP show up
-immediately in the dashboard and vice versa.
+pattern as Day 2. This module has NO knowledge of MCP or Flask.
 
-There is no real brokerage connection here - "thinkorswim" is mocked:
-prices are a seeded random walk stored in `paper_market_prices`, and orders
-just move fake cash/shares around in Lakebase. This is intentional: it lets
-students wire an Agent Bricks agent to an MCP server and watch it "trade"
-without any real money, real brokerage account, or real market-data key.
+There is no real brokerage connection here: prices are a seeded random
+walk stored in `paper_market_prices`, and orders just move fake
+cash/shares around in Lakebase.
 """
 
+import base64
 import os
 import random
 from datetime import datetime, timezone
+
+import requests
+from databricks.sdk import WorkspaceClient
 
 import lakebase
 
@@ -28,6 +31,16 @@ PRICES_TABLE = os.environ.get("PAPER_PRICES_TABLE", "paper_market_prices")
 
 DEFAULT_STARTING_CASH = float(os.environ.get("PAPER_STARTING_CASH", "100000"))
 
+# Massive.com (https://massive.com) provides real U.S. stock market quotes.
+# Used by get_quote() below as the primary price source, with a fallback to
+# the simulated random-walk price if the Massive API is unavailable (e.g. no
+# API key configured yet, rate-limited, or a transient network error) - this
+# keeps paper trading usable even without a Massive account.
+_MASSIVE_SECRET_SCOPE = os.environ.get("MASSIVE_SECRET_SCOPE", "database")
+_MASSIVE_SECRET_KEY = os.environ.get("MASSIVE_SECRET_KEY", "massive-api-key")
+_MASSIVE_BASE_URL = "https://api.massive.com"
+_w = WorkspaceClient()
+
 # Deterministic per-symbol base price so a fresh symbol always starts
 # somewhere sane instead of $0 - a simple hash-based seed, no external API.
 _MIN_BASE_PRICE = 20.0
@@ -37,6 +50,48 @@ _MAX_BASE_PRICE = 450.0
 def _seed_price(symbol: str) -> float:
     rng = random.Random(symbol.upper())
     return round(rng.uniform(_MIN_BASE_PRICE, _MAX_BASE_PRICE), 2)
+
+
+def _massive_api_key() -> str | None:
+    """Fetch the Massive.com API key from the Databricks secret scope, or
+    None if it isn't configured (Massive quotes are optional)."""
+    try:
+        secret = _w.secrets.get_secret(scope=_MASSIVE_SECRET_SCOPE, key=_MASSIVE_SECRET_KEY)
+    except Exception:
+        return None
+
+    try:
+        return base64.b64decode(secret.value).decode("utf-8")
+    except Exception:
+        return None
+
+
+def _fetch_massive_quote(symbol: str) -> float | None:
+    """
+    Fetch the latest real NBBO quote for `symbol` from Massive.com and
+    return the bid/ask midpoint price, or None if unavailable (missing API
+    key, bad symbol, rate limit, network error, etc.) so the caller can fall
+    back to the simulated price.
+    """
+    api_key = _massive_api_key()
+    if not api_key:
+        return None
+
+    try:
+        resp = requests.get(
+            f"{_MASSIVE_BASE_URL}/v2/last/nbbo/{symbol}",
+            params={"apiKey": api_key},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results") or {}
+        ask = results.get("P")
+        bid = results.get("p")
+        if ask is None or bid is None:
+            return None
+        return round((float(ask) + float(bid)) / 2, 2)
+    except Exception:
+        return None
 
 
 def ensure_tables() -> None:
@@ -92,27 +147,32 @@ def ensure_tables() -> None:
 
 def get_quote(symbol: str) -> dict:
     """
-    Return a simulated quote for `symbol`. If the symbol has never been
-    quoted before, seed it with a deterministic base price and nudge it
-    with a small random walk on every call (a stand-in for a live
-    thinkorswim/market-data feed - see the README for wiring in a real
-    quote source instead).
+    Return the latest quote for `symbol`. Tries a real quote from
+    Massive.com (https://massive.com) first; if that's unavailable (no API
+    key configured, rate-limited, bad symbol, network error, etc.), falls
+    back to a simulated price: if the symbol has never been quoted before,
+    seed it with a deterministic base price, then nudge it with a small
+    random walk on every call.
     """
     ensure_tables()
     symbol = symbol.strip().upper()
 
-    rows = lakebase.run_query(
-        f"SELECT price FROM {PRICES_TABLE} WHERE symbol = %s", (symbol,)
-    )
-    if rows:
-        last_price = float(rows[0]["price"])
+    massive_price = _fetch_massive_quote(symbol)
+    if massive_price is not None:
+        new_price = massive_price
     else:
-        last_price = _seed_price(symbol)
+        rows = lakebase.run_query(
+            f"SELECT price FROM {PRICES_TABLE} WHERE symbol = %s", (symbol,)
+        )
+        if rows:
+            last_price = float(rows[0]["price"])
+        else:
+            last_price = _seed_price(symbol)
 
-    # Random-walk nudge (+/- ~1.5%) so repeated quotes drift like a real tape.
-    rng = random.Random()
-    drift = rng.uniform(-0.015, 0.015)
-    new_price = round(max(0.01, last_price * (1 + drift)), 2)
+        # Random-walk nudge (+/- ~1.5%) so repeated quotes drift like a real tape.
+        rng = random.Random()
+        drift = rng.uniform(-0.015, 0.015)
+        new_price = round(max(0.01, last_price * (1 + drift)), 2)
 
     lakebase.run_write(
         f"""

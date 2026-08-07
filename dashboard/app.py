@@ -1,12 +1,13 @@
 """
 Paper-trading dashboard: a small Flask app to WATCH what the Agent Bricks
-agent is doing to the paper account via the thinkorswim MCP server
-(tos_mcp_server.py). This app never places trades itself - it only reads
-from Lakebase via paper_broker.py, so it can run side-by-side with the MCP
-server and show, in near real time, the same account/positions/orders the
-agent is manipulating.
+agent is doing to the paper account via the Alpaca paper-trading MCP
+server (alpaca_mcp_server.py). This app never places trades itself - it
+only reads from Alpaca Markets' hosted paper-trading account via
+alpaca_broker.py, so it can run side-by-side with the MCP server and show,
+in near real time, the same account/positions/orders the agent is
+manipulating.
 
-Deploy this as its OWN Databricks App (separate from tos_mcp_server.py) -
+Deploy this as its OWN Databricks App (separate from alpaca_mcp_server.py) -
 one app serves MCP tool calls, the other serves the human-facing UI.
 
 Run locally:
@@ -17,7 +18,7 @@ import os
 
 from flask import Flask, jsonify, render_template, request
 
-import paper_broker
+import alpaca_broker
 
 app = Flask(__name__)
 
@@ -48,7 +49,7 @@ def index():
 def api_account():
     """Full account summary: cash, positions marked-to-market, total equity."""
     account_id = request.args.get("account_id", DEFAULT_ACCOUNT_ID)
-    return jsonify(paper_broker.get_account_summary(account_id))
+    return jsonify(alpaca_broker.get_account_summary(account_id))
 
 
 @app.route("/api/orders")
@@ -56,7 +57,7 @@ def api_orders():
     """Recent order history for the account, most recent first."""
     account_id = request.args.get("account_id", DEFAULT_ACCOUNT_ID)
     limit = int(request.args.get("limit", 50))
-    return jsonify(paper_broker.get_order_history(account_id, limit))
+    return jsonify(alpaca_broker.get_order_history(account_id, limit))
 
 
 @app.route("/api/quote")
@@ -65,7 +66,7 @@ def api_quote():
     symbol = request.args.get("symbol", "")
     if not symbol:
         return jsonify({"error": "symbol query param is required"}), 400
-    return jsonify(paper_broker.get_quote(symbol))
+    return jsonify(alpaca_broker.get_quote(symbol))
 
 
 if __name__ == "__main__":

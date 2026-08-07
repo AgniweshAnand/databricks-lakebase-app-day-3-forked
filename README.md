@@ -1,74 +1,117 @@
-# Day 3: Agent Bricks + a mock "thinkorswim" MCP Server (Fake Trades on Lakebase)
+# Day 3: Agent Bricks + an Alpaca Markets Paper-Trading MCP Server
 
 Builds on [Day 2](../databricks-lakebase-app-day-2/README.md)'s Lakebase pattern. Day 3 adds:
 
-- A **mock "thinkorswim" MCP server** (`mcp_server/`) - exposes paper-trading tools
+- An **Alpaca Markets paper-trading MCP server** (`mcp_server/`) - exposes paper-trading tools
   (`get_quote`, `place_trade`, `get_positions`, `get_account_summary`, `get_order_history`)
-  over the Model Context Protocol, backed by Lakebase.
+  over the Model Context Protocol, backed by a real Alpaca paper-trading account.
 - A **Databricks Agent Bricks agent** that connects to that MCP server as an external tool,
   reads market data from your Lakebase Day 2 watchlist/news tables, and decides to place
-  simulated ("paper") trades.
-- A small **dashboard app** (`dashboard/`) to watch the fake trades land in near real time.
+  paper trades against your real (but fake-money) Alpaca account.
+- A small **dashboard app** (`dashboard/`) to watch those trades land in near real time.
 
-> **Why "mock"?** As of this writing there is no official public thinkorswim/Schwab MCP server
-> you can just plug in. This lab builds one with the exact shape a real one would have
-> (quote / trade / positions / order history), backed by a safe, Lakebase-persisted paper
-> trading engine - so students can wire an Agent Bricks agent to "trade" with zero risk of real
-> money moving, and zero dependency on a real brokerage account or market-data key. See
-> "Swapping in a real broker" below for pointing this at a real paper/live trading API later
-> without changing the agent side at all.
+> **Why Alpaca?** Alpaca Markets provides a free, real, hosted paper-trading environment with a
+> clean Python SDK ([alpaca-py](https://alpaca.markets/sdks/python/)) and no lengthy manual app
+> approval process, so students get real market data and real (simulated-money) order fills
+> without any risk of real money moving. See "Setting up Alpaca Markets" below to create your
+> paper account and API keys.
 
 ## Architecture
 
 ```
-Agent Bricks agent  --(MCP tool calls)-->  mcp_server/tos_mcp_server.py  --(SQL)-->  Lakebase
-        ^                                                                              ^
-        | (reads context: watchlist, ticker_news_* from Day 2)                         |
-        +------------------------------------------------------------------------------+
-                                                                                         |
-                                        dashboard/app.py  <--(reads same tables)---------+
+Agent Bricks agent  --(MCP tool calls)-->  mcp_server/alpaca_mcp_server.py  --(REST)-->  Alpaca Markets (paper)
+        ^                                                                                     
+        | (reads context: watchlist, ticker_news_* from Day 2 Lakebase)                        
+        +-----------------------------------------------------------------------------------+
+                                                                                              |
+                                        dashboard/app.py  <--(reads same Alpaca account)------+
 ```
 
 - `mcp_server/` and `dashboard/` are **two separate Databricks Apps** - one serves MCP tool
   calls to the agent, the other serves a human-facing dashboard. Both read/write the exact same
-  Lakebase tables (via their own copy of `lakebase.py` + `paper_broker.py`), so trades placed by
+  Alpaca paper-trading account (via their own copy of `alpaca_broker.py`), so trades placed by
   the agent through MCP show up in the dashboard immediately, and vice versa.
-- `mcp_server/paper_broker.py` is the actual paper-trading engine: it creates
-  `paper_accounts`, `paper_positions`, `paper_orders`, and `paper_market_prices` tables in
-  Lakebase, and implements quote simulation (seeded random walk per symbol) + order
-  execution (cash/position accounting, insufficient-funds and oversell guardrails).
-- `mcp_server/tos_mcp_server.py` wraps `paper_broker.py` with [FastMCP](https://gofastmcp.com/)
+- `mcp_server/alpaca_broker.py` is the broker adapter: it wraps `alpaca-py`'s `TradingClient`
+  (orders, positions, account info) and `StockHistoricalDataClient` (quotes) to implement the
+  5 functions the MCP tools call. There's no local simulation - quotes, fills, cash, and
+  positions all come straight from Alpaca's paper-trading API.
+- `mcp_server/alpaca_mcp_server.py` wraps `alpaca_broker.py` with [FastMCP](https://gofastmcp.com/)
   `@mcp.tool` decorators and serves them over streamable HTTP - the transport Databricks'
   MCP client/gateway expects when you [host your own MCP server as a Databricks App](https://docs.databricks.com/aws/en/agents/mcp-tools/custom-mcp).
+- Alpaca's paper trading is **one account per API key pair**, not multi-tenant - `account_id` is
+  accepted by every tool for signature compatibility but doesn't select between accounts; every
+  call operates against the single Alpaca paper account configured via secrets (see below).
 
 ## Files
 
-- `mcp_server/tos_mcp_server.py` - FastMCP server exposing the 5 paper-trading tools
-- `mcp_server/paper_broker.py` - Paper-trading engine (accounts, positions, orders, simulated quotes)
-- `mcp_server/lakebase.py` - Lakebase connection helper (same pattern as Day 2)
+- `mcp_server/alpaca_mcp_server.py` - FastMCP server exposing the 5 paper-trading tools
+- `mcp_server/alpaca_broker.py` - Broker adapter wrapping Alpaca's `alpaca-py` SDK
+- `mcp_server/paper_broker.py` / `mcp_server/lakebase.py` - legacy Lakebase-simulated engine,
+  kept for reference/fallback only (no longer imported)
 - `mcp_server/app.yaml` / `mcp_server/requirements.txt` - Databricks App config for the MCP server
-- `dashboard/app.py` - Flask dashboard (read-only view of the paper account)
+- `dashboard/app.py` - Flask dashboard (read-only view of the Alpaca paper account)
 - `dashboard/templates/index.html` - Dashboard UI (cash, positions, P/L, recent orders)
-- `dashboard/paper_broker.py` / `dashboard/lakebase.py` - copies of the same modules (each
-  Databricks App deploys from its own folder, so each needs its own copy of shared code)
+- `dashboard/alpaca_broker.py` - copy of the same broker adapter (each Databricks App deploys
+  from its own folder, so each needs its own copy of shared code)
+- `dashboard/paper_broker.py` / `dashboard/lakebase.py` - legacy Lakebase-simulated engine,
+  kept for reference/fallback only (no longer imported)
 - `dashboard/app.yaml` / `dashboard/requirements.txt` - Databricks App config for the dashboard
-- `setup_secrets.py` - One-time script to store the Lakebase URL secret (same as Day 2)
+- `setup_secrets.py` - One-time script to store the Lakebase URL secret (same as Day 2; still
+  used if you keep Day 2's watchlist/news tables for agent context)
 - `.env.example` - Local dev env var template
+
+## Setting up Alpaca Markets
+
+Both apps need an Alpaca **paper-trading** API key ID and secret key, stored as Databricks
+secrets (never committed to the repo).
+
+### 1. Create a free Alpaca account
+
+Sign up at [alpaca.markets](https://alpaca.markets/) (no funding or brokerage approval needed
+for paper trading - it's instant, unlike a real brokerage app).
+
+### 2. Generate paper-trading API keys
+
+1. Log in to the [Alpaca dashboard](https://app.alpaca.markets/).
+2. Make sure you're viewing **Paper Trading** (there's a live/paper toggle in the dashboard) -
+   never use live-trading keys for this lab.
+3. Under **API Keys**, generate a new key pair. Copy the **Key ID** and **Secret Key**
+   immediately - the secret is only shown once.
+
+### 3. Store the keys as Databricks secrets
+
+From a Databricks notebook or the CLI, base64-encode and store both values (same pattern as
+the Lakebase URL secret):
+
+```bash
+databricks secrets put-secret database alpaca-key-id --string-value "$(echo -n YOUR_KEY_ID | base64)"
+databricks secrets put-secret database alpaca-secret-key --string-value "$(echo -n YOUR_SECRET_KEY | base64)"
+```
+
+If you use a different secret scope than `database`, update `ALPACA_SECRET_SCOPE` in both
+`mcp_server/app.yaml` and `dashboard/app.yaml` to match.
+
+### 4. (Local dev only) set the keys as environment variables
+
+For running the apps locally without Databricks secrets, `alpaca_broker.py` still reads through
+`WorkspaceClient().secrets.get_secret()`, so local runs need a Databricks CLI profile configured
+with access to the secret scope above (`databricks auth login`), or you can temporarily hardcode
+test keys - just never commit them.
 
 ## Step-by-step setup
 
 ### 1. Reuse (or create) your Lakebase instance from Day 2
 
-If you already have a Lakebase instance + native-password role from Day 2, reuse it - this lab
-just adds new tables to the same instance. Otherwise, follow
+Lakebase is still used for agent context (Day 2's `watchlist`/`ticker_news_*` tables) even
+though trading now goes through Alpaca. If you already have a Lakebase instance from Day 2,
+reuse it. Otherwise, follow
 [Day 2's step 2](../databricks-lakebase-app-day-2/README.md#2-create-a-lakebase-instance-and-a-native-password-role)
 to create one.
 
-### 2. Store the Lakebase secret
+### 2. Store secrets
 
-From a Databricks notebook (`%sh python setup_secrets.py`), same as Day 2 - this stores your
-Lakebase URL as secret `database/lakebase-url`. If you already ran Day 2's `setup_secrets.py`
-against the same secret scope/key, you can skip this.
+- Lakebase URL: from a Databricks notebook (`%sh python setup_secrets.py`), same as Day 2.
+- Alpaca API keys: see "Setting up Alpaca Markets" above.
 
 ### 3. Configure environment variables (local dev)
 
@@ -80,18 +123,18 @@ cp .env.example .env
 ### 4. Install dependencies and run both apps locally
 
 ```bash
-cd mcp_server && pip install -r requirements.txt && python tos_mcp_server.py   # serves MCP on :8000
+cd mcp_server && pip install -r requirements.txt && python alpaca_mcp_server.py   # serves MCP on :8000
 ```
 
 In a second terminal:
 
 ```bash
-cd dashboard && pip install -r requirements.txt && python app.py                # serves UI on :8001
+cd dashboard && pip install -r requirements.txt && python app.py                    # serves UI on :8001
 ```
 
-Open `http://localhost:8001` to see the (initially empty) paper account. Use an
-[MCP Inspector](https://docs.databricks.com/aws/en/agents/mcp-tools/connect-clients) or `curl`
-against `http://localhost:8000` to sanity-check the tools before deploying.
+Open `http://localhost:8001` to see your Alpaca paper account (starting cash, no positions
+yet). Use an [MCP Inspector](https://docs.databricks.com/aws/en/agents/mcp-tools/connect-clients)
+or `curl` against `http://localhost:8000` to sanity-check the tools before deploying.
 
 ### 5. Deploy both apps to Databricks Apps
 
@@ -101,20 +144,20 @@ different subfolders of the same Git folder:
 
 1. Create a Git folder for this repo (once) as in Day 2.
 2. **Deploy the MCP server app**: Compute > Apps > Create app > Custom, name it e.g.
-   `thinkorswim-mcp`, and point its source at the Git folder's `databricks-lakebase-app-day-3/mcp_server/`
+   `alpaca-paper-mcp`, and point its source at the Git folder's `databricks-lakebase-app-day-3/mcp_server/`
    subfolder (so it picks up `mcp_server/app.yaml`). Deploy it, then copy its app URL - you'll
    register that URL as an external MCP server in step 6.
 3. **Deploy the dashboard app**: repeat, naming it e.g. `paper-trading-dashboard`, pointing at
-   `databricks-lakebase-app-day-3/dashboard/`. Deploy it and open its URL to confirm the (still
-   empty) dashboard loads.
+   `databricks-lakebase-app-day-3/dashboard/`. Deploy it and open its URL to confirm the
+   dashboard loads and shows your Alpaca account.
 
 ### 6. Register the MCP server as an external MCP in your workspace
 
 Follow [Connect agents to external MCPs and tools](https://docs.databricks.com/aws/en/agents/mcp-tools/connect-external):
 
 1. In your workspace, go to **AI Gateway** > **MCPs** > **Add MCP** (or **Register external MCP**).
-2. Paste the `thinkorswim-mcp` app's URL from step 5 as the server endpoint (streamable HTTP).
-3. Give it a name (e.g. `thinkorswim-paper-trading`) and save. Databricks will introspect the
+2. Paste the `alpaca-paper-mcp` app's URL from step 5 as the server endpoint (streamable HTTP).
+3. Give it a name (e.g. `alpaca-paper-trading`) and save. Databricks will introspect the
    server and list the 5 tools (`get_quote`, `place_trade`, `get_positions`,
    `get_account_summary`, `get_order_history`).
 4. Grant your Agent Bricks agent (created next) access to this MCP server via Unity Catalog
@@ -126,7 +169,7 @@ Follow [Connect agents to external MCPs and tools](https://docs.databricks.com/a
 2. Choose the **Custom LLM** (or **Multi-agent supervisor**, if you want to combine this with a
    research agent) agent type - either works for a single tool-calling agent like this.
 3. Under **Tools**, add:
-   - The `thinkorswim-paper-trading` MCP server you registered in step 6 (all 5 tools, or a
+   - The `alpaca-paper-trading` MCP server you registered in step 6 (all 5 tools, or a
      curated subset - e.g. leave out `place_trade` for a "research-only" version of the agent
      first, then add it back once you trust the guardrails).
    - Optionally, a **Unity Catalog function tool** or **Genie space** wired to your Day 2
@@ -145,39 +188,20 @@ Follow [Connect agents to external MCPs and tools](https://docs.databricks.com/a
    and tool selection before enabling it for live chat.
 6. Deploy the agent and chat with it, e.g.: *"Look at my watchlist, check recent news sentiment,
    and place a small paper trade if you find a good opportunity."* Watch the trade land on the
-   dashboard from step 5.
-
-## Guardrails already built into `paper_broker.py`
-
-- **No real money, no real brokerage**: everything is simulated and stored only in your own
-  Lakebase instance.
-- **Insufficient-funds check**: a BUY that would exceed the paper account's cash balance is
-  rejected with a clear error (surfaced back to the agent as a tool error, so it can retry with
-  a smaller size).
-- **Oversell check**: a SELL larger than the current position is rejected the same way.
-- **Deterministic quote seeding**: a fresh symbol always gets a sane starting price (a
-  `random.Random(symbol)`-seeded value between $20-$450) instead of $0, so the first trade of a
-  new ticker doesn't error out or produce a nonsensical fill price.
-
-You (or students) can tighten these further - e.g. a max order size, a daily trade count limit,
-or an allow-list of symbols - directly in `place_order()` in `paper_broker.py`.
-
-## Swapping in a real broker later
-
-Keep `mcp_server/tos_mcp_server.py`'s 5 tool signatures the same (`get_quote`, `place_trade`,
-`get_positions`, `get_account_summary`, `get_order_history`) and replace the `paper_broker.*`
-calls inside each `@mcp.tool` function with calls to a real broker SDK (e.g.
-[schwab-py](https://github.com/alexgolec/schwab-py) for Schwab/thinkorswim's actual paper
-trading API, or Alpaca's official MCP server). The Agent Bricks agent and its MCP registration
-in step 6 don't need to change at all - only what's inside the tool implementations does.
+   dashboard from step 5, and in your Alpaca paper-trading dashboard too.
 
 ## Notes
 
-- `mcp_server/` and `dashboard/` intentionally duplicate `lakebase.py` and `paper_broker.py`
-  rather than sharing a package, because each Databricks App deploys independently from its own
-  folder with its own `app.yaml`/`requirements.txt` - there's no shared Python package install
-  step across Databricks Apps. If you prefer a single shared package, publish `paper_broker.py`
-  + `lakebase.py` to a private PyPI index or wheel and add it to both `requirements.txt` files
-  instead of duplicating.
-- `get_quote`'s random-walk simulation has no relationship to real market prices - don't use this
-  lab's fills for anything beyond demonstrating the MCP wiring.
+- `mcp_server/` and `dashboard/` intentionally duplicate `alpaca_broker.py` rather than sharing
+  a package, because each Databricks App deploys independently from its own folder with its own
+  `app.yaml`/`requirements.txt` - there's no shared Python package install step across
+  Databricks Apps. If you prefer a single shared package, publish `alpaca_broker.py` to a
+  private PyPI index or wheel and add it to both `requirements.txt` files instead of
+  duplicating.
+- `place_trade` submits real orders against your real Alpaca **paper** account - fills use real
+  market prices, but no real money moves. Never point `alpaca_broker.py` at live-trading keys
+  for this lab.
+- The legacy `paper_broker.py` + `lakebase.py` Lakebase-simulated engine is still present in
+  both folders for reference, in case you want to compare a fully local simulation against
+  Alpaca's real paper-trading fills, or fall back to it if you don't want to create an Alpaca
+  account.
