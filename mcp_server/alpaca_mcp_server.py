@@ -8,6 +8,8 @@ Databricks Agent Bricks agent can call them like any other tool:
     - get_positions(account_id)
     - get_account_summary(account_id)
     - get_order_history(account_id, limit)
+    - get_balance(account_id)
+    - get_current_user()
 
 These tools are backed by Alpaca Markets' real, hosted paper-trading
 account (see alpaca_broker.py), so students can safely wire an Agent
@@ -34,9 +36,12 @@ Run locally:
 
 import os
 import logging
+from contextvars import ContextVar
 
 from fastmcp import FastMCP
 from sentence_transformers import SentenceTransformer
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 import alpaca_broker
 import massive_broker
@@ -62,7 +67,38 @@ EMBEDDINGS_TABLE_NAME = os.environ.get("EMBEDDINGS_TABLE_NAME", "ticker_news_emb
 CHUNK_EMBEDDINGS_TABLE_NAME = os.environ.get("CHUNK_EMBEDDINGS_TABLE_NAME", "ticker_news_chunk_embeddings")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
+# Context variable to store request headers for accessing end-user identity
+_request_context: ContextVar[dict] = ContextVar('request_context', default={})
+
+
+def _get_end_user_email() -> str:
+    """Get the actual end user's email from request headers, or fallback to service principal."""
+    # Try to get from X-Forwarded-User header (Databricks App context)
+    headers = _request_context.get()
+    forwarded_user = headers.get('x-forwarded-user')
+    if forwarded_user:
+        return forwarded_user
+    
+    # Fallback: use service principal (local development or non-App contexts)
+    from databricks.sdk import WorkspaceClient
+    w = WorkspaceClient()
+    return w.current_user.me().user_name or 'zach@dataexpert.io'
+
+
 mcp = FastMCP("alpaca-paper-trading")
+
+
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    """Middleware to capture HTTP headers containing end-user identity."""
+    async def dispatch(self, request: Request, call_next):
+        # Capture headers that Databricks injects with user identity
+        headers = {
+            'x-forwarded-user': request.headers.get('x-forwarded-user'),
+            'x-forwarded-email': request.headers.get('x-forwarded-email'),
+        }
+        _request_context.set(headers)
+        response = await call_next(request)
+        return response
 
 
 @mcp.tool
@@ -151,6 +187,69 @@ def get_order_history(account_id: str, limit: int = 50) -> list[dict]:
 
 
 @mcp.tool
+def get_balance(account_id: str) -> dict:
+    """
+    Get the current cash balance and buying power for the Alpaca paper 
+    trading account.
+
+    Args:
+        account_id: Accepted for signature compatibility; not used to
+            select an account.
+
+    Returns:
+        A dict with account_id, cash_balance, buying_power, and currency.
+    """
+    return alpaca_broker.get_balance(account_id)
+
+
+@mcp.tool
+def get_current_user() -> dict:
+    """
+    Get information about the currently authenticated end user accessing the MCP server.
+    
+    When running as a Databricks App, this returns the actual end user making the
+    request (from X-Forwarded-User header), not the service principal running the app.
+
+    Returns:
+        A dict with user_name (email from X-Forwarded-User header), 
+        forwarded_email, and source ("request_header" or "service_principal").
+    """
+    try:
+        # First, try to get the end user from the request headers
+        # Databricks injects X-Forwarded-User with the actual user's email
+        headers = _request_context.get()
+        forwarded_user = headers.get('x-forwarded-user')
+        forwarded_email = headers.get('x-forwarded-email')
+        
+        if forwarded_user:
+            return {
+                "status": "success",
+                "user_name": forwarded_user,
+                "forwarded_email": forwarded_email,
+                "source": "request_header",
+            }
+        
+        # Fallback: return the service principal if headers aren't available
+        # (e.g., when running locally or in non-App contexts)
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        user = w.current_user.me()
+        return {
+            "status": "success",
+            "user_name": user.user_name,
+            "display_name": user.display_name,
+            "active": user.active,
+            "source": "service_principal",
+        }
+    except Exception as e:
+        logger.exception("Failed to get current user")
+        return {
+            "status": "error",
+            "message": f"Failed to get current user: {str(e)}",
+        }
+
+
+@mcp.tool
 def add_to_watchlist(symbol: str) -> dict:
     """
     Add a stock to the watchlist by fetching its current quote from Massive.com
@@ -165,10 +264,8 @@ def add_to_watchlist(symbol: str) -> dict:
         A dict with the quote data and confirmation that it was added to the watchlist.
     """
     try:
-        # Get the logged-in user's email
-        from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
-        user_email = w.current_user.me().user_name or 'zach@dataexpert.io'
+        # Get the actual end user's email (not the service principal)
+        user_email = _get_end_user_email()
         
         # Get quote from Massive.com
         quote = massive_broker.get_quote(symbol)
@@ -207,7 +304,7 @@ def add_to_watchlist(symbol: str) -> dict:
 
 
 @mcp.tool
-def get_watchlist(limit: int = 100) -> dict:
+def get_watchlist(limit: int = 100, email: str = 'zach@dataexpert.io') -> dict:
     """
     Retrieve all stocks in the authenticated user's watchlist from Lakebase.
     
@@ -215,15 +312,13 @@ def get_watchlist(limit: int = 100) -> dict:
     
     Args:
         limit: Maximum number of entries to return (default: 100).
+        email: authenticate user's email
     
     Returns:
         A dict with watchlist entries sorted by most recently added.
     """
     try:
-        # Get the logged-in user's email
-        from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
-        user_email = w.current_user.me().user_name
+        # Get the actual end user's email (not the service principal)
         
         sql = """
         SELECT 
@@ -235,11 +330,11 @@ def get_watchlist(limit: int = 100) -> dict:
         LIMIT %s
         """
         
-        rows = lakebase.run_query(sql, (user_email, limit))
+        rows = lakebase.run_query(sql, (email, limit))
         
         return {
             "status": "success",
-            "user_email": user_email,
+            "user_email": email,
             "count": len(rows),
             "watchlist": rows,
         }
@@ -265,10 +360,8 @@ def remove_from_watchlist(symbol: str) -> dict:
         A dict with status and confirmation message.
     """
     try:
-        # Get the logged-in user's email
-        from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
-        user_email = w.current_user.me().user_name
+        # Get the actual end user's email (not the service principal)
+        user_email = _get_end_user_email()
         
         symbol = symbol.strip().upper()
         
@@ -386,6 +479,11 @@ def vector_search(query: str, limit: int = 10, search_chunks: bool = True) -> di
 
 
 if __name__ == "__main__":
+    # Add middleware to capture request headers for end-user identity
+    # This must be done before mcp.run() is called
+    if hasattr(mcp, 'app') and mcp.app is not None:
+        mcp.app.add_middleware(RequestContextMiddleware)
+    
     # Databricks Apps route external HTTP traffic to this port via app.yaml;
     # streamable-http is the transport Databricks' MCP client/gateway expects
     # (see the "Host your own MCP" doc linked in the module docstring above).

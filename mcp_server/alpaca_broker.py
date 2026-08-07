@@ -14,10 +14,10 @@ same signatures alpaca_mcp_server.py already calls - it is not used to select
 between multiple accounts. Every call operates against the single Alpaca
 paper account configured via the ALPACA_* secrets below.
 
-Swap-in note: this module implements the same 5 functions as
-paper_broker.py (get_quote, place_order, get_positions,
-get_account_summary, get_order_history), so alpaca_mcp_server.py only needs
-to import this module instead.
+Swap-in note: this module implements the trading functions
+(get_quote, place_order, get_positions, get_account_summary, 
+get_order_history, get_balance) that mirror paper_broker.py, 
+so alpaca_mcp_server.py only needs to import this module instead.
 """
 
 import base64
