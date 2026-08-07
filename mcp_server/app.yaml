@@ -1,0 +1,11 @@
+command:
+  - "python"
+  - "tos_mcp_server.py"
+
+env:
+  - name: LAKEBASE_SECRET_SCOPE
+    value: "database"
+  - name: LAKEBASE_SECRET_KEY
+    value: "lakebase-url"
+  - name: PAPER_STARTING_CASH
+    value: "100000"

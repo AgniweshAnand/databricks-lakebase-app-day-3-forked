@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Paper Trading Dashboard - Agent Bricks + thinkorswim MCP</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 16px; }
+    h1 { font-size: 1.4rem; }
+    .cards { display: flex; gap: 16px; margin-bottom: 24px; }
+    .card { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
+    .card .label { color: #666; font-size: 0.85rem; }
+    .card .value { font-size: 1.4rem; font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 32px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+    .pos { color: #0a7a2f; }
+    .neg { color: #b3261e; }
+    .side-BUY { color: #0a7a2f; font-weight: 600; }
+    .side-SELL { color: #b3261e; font-weight: 600; }
+    #refresh { padding: 6px 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>📈 Paper Trading Dashboard</h1>
+  <p>Watching account <code id="account-id">{{ default_account_id }}</code> - trades placed by an Agent Bricks
+     agent through the <code>thinkorswim</code> mock MCP server show up here.
+     <button id="refresh">Refresh</button></p>
+
+  <div class="cards">
+    <div class="card"><div class="label">Cash Balance</div><div class="value" id="cash">-</div></div>
+    <div class="card"><div class="label">Market Value</div><div class="value" id="market-value">-</div></div>
+    <div class="card"><div class="label">Total Equity</div><div class="value" id="total-equity">-</div></div>
+  </div>
+
+  <h2>Open Positions</h2>
+  <table>
+    <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Last Price</th><th>Market Value</th><th>Unrealized P/L</th></tr></thead>
+    <tbody id="positions-body"></tbody>
+  </table>
+
+  <h2>Recent Orders</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Notional</th></tr></thead>
+    <tbody id="orders-body"></tbody>
+  </table>
+
+  <script>
+    const accountId = document.getElementById('account-id').textContent.trim();
+    const money = (n) => '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+    async function refresh() {
+      const [account, orders] = await Promise.all([
+        fetch(`/api/account?account_id=${accountId}`).then(r => r.json()),
+        fetch(`/api/orders?account_id=${accountId}`).then(r => r.json()),
+      ]);
+
+      document.getElementById('cash').textContent = money(account.cash_balance);
+      document.getElementById('market-value').textContent = money(account.market_value);
+      document.getElementById('total-equity').textContent = money(account.total_equity);
+
+      const posBody = document.getElementById('positions-body');
+      posBody.innerHTML = '';
+      for (const p of account.positions) {
+        const plClass = p.unrealized_pl >= 0 ? 'pos' : 'neg';
+        posBody.innerHTML += `<tr>
+          <td>${p.symbol}</td><td>${p.quantity}</td><td>${money(p.avg_cost)}</td>
+          <td>${money(p.last_price)}</td><td>${money(p.market_value)}</td>
+          <td class="${plClass}">${money(p.unrealized_pl)}</td>
+        </tr>`;
+      }
+
+      const ordersBody = document.getElementById('orders-body');
+      ordersBody.innerHTML = '';
+      for (const o of orders) {
+        ordersBody.innerHTML += `<tr>
+          <td>${new Date(o.created_at).toLocaleString()}</td><td>${o.symbol}</td>
+          <td class="side-${o.side}">${o.side}</td><td>${o.quantity}</td>
+          <td>${money(o.price)}</td><td>${money(o.notional)}</td>
+        </tr>`;
+      }
+    }
+
+    document.getElementById('refresh').addEventListener('click', refresh);
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>
