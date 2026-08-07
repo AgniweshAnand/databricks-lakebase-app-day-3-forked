@@ -101,11 +101,17 @@ def place_order(account_id: str, symbol: str, side: str, quantity: float) -> dic
     if quantity <= 0:
         raise ValueError(f"quantity must be positive, got {quantity!r}")
 
+    # Crypto orders require GTC (Good-Til-Canceled) or IOC (Immediate-Or-Cancel)
+    # Stock orders can use DAY
+    # Crypto symbols typically end with USD (e.g., BTCUSD, ETHUSD)
+    is_crypto = symbol.endswith('USD') and len(symbol) > 3
+    time_in_force = TimeInForce.GTC if is_crypto else TimeInForce.DAY
+
     order_data = MarketOrderRequest(
         symbol=symbol,
         qty=quantity,
         side=OrderSide.BUY if side == "BUY" else OrderSide.SELL,
-        time_in_force=TimeInForce.DAY,
+        time_in_force=time_in_force,
     )
     order = _get_trading_client().submit_order(order_data=order_data)
     return _order_to_dict(order)

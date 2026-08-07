@@ -199,7 +199,7 @@ def get_balance(account_id: str) -> dict:
     Returns:
         A dict with account_id, cash_balance, buying_power, and currency.
     """
-    return alpaca_broker.get_balance(account_id)
+    return alpaca_broker.get_account_summary(account_id)
 
 
 @mcp.tool
