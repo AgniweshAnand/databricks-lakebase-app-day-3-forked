@@ -1,60 +1,61 @@
 """
-Lakebase (Databricks-managed Postgres) connection helper.
-
-Identical pattern to Day 2's lakebase.py: connects using a single
-LAKEBASE_URL (a standard Postgres connection URL, e.g.
-postgresql://role:password@host:5432/databricks_postgres?sslmode=require)
-pointing at a native Postgres role with a static, non-expiring password.
+Lakebase PostgreSQL connection manager using Databricks Secrets.
+Provides pooled execution for SELECT and INSERT/UPDATE/DELETE queries.
 """
 
-import base64
 import os
-from contextlib import contextmanager
-
+import base64
+import logging
 import psycopg2
-from databricks.sdk import WorkspaceClient
 from psycopg2.extras import RealDictCursor
-from sqlalchemy import create_engine
+from databricks.sdk import WorkspaceClient
 
-_w = WorkspaceClient()
-
-_SCOPE = os.environ.get("LAKEBASE_SECRET_SCOPE", "database")
-_KEY = os.environ.get("LAKEBASE_SECRET_KEY", "lakebase-url")
+logger = logging.getLogger("lakebase")
 
 
-def _lakebase_url() -> str:
-    """Fetch and decode the Lakebase connection URL from the Databricks secret scope."""
-    secret = _w.secrets.get_secret(scope=_SCOPE, key=_KEY)
-    return base64.b64decode(secret.value).decode("utf-8")
+def get_db_url() -> str:
+    """Retrieve the PostgreSQL connection string from Databricks Secrets or env."""
+    # 1. Direct environment variable fallback
+    if os.getenv("LAKEBASE_URL"):
+        return os.getenv("LAKEBASE_URL")
 
-
-@contextmanager
-def get_connection():
-    """Yield a raw psycopg2 connection with a RealDictCursor factory."""
-    conn = psycopg2.connect(_lakebase_url(), cursor_factory=RealDictCursor)
+    # 2. Databricks Secrets Scope
     try:
-        yield conn
+        scope = os.getenv("LAKEBASE_SECRET_SCOPE", "database")
+        key = os.getenv("LAKEBASE_SECRET_KEY", "lakebase-url")
+        w = WorkspaceClient()
+        secret_resp = w.secrets.get_secret(scope=scope, key=key)
+        if secret_resp.value:
+            return base64.b64decode(secret_resp.value).decode("utf-8")
+    except Exception as e:
+        logger.warning(f"Could not load Lakebase URL from Databricks secrets: {e}")
+
+    raise ValueError("Lakebase database URL is not configured.")
+
+
+def get_connection():
+    """Create and return a raw psycopg2 database connection."""
+    db_url = get_db_url()
+    return psycopg2.connect(db_url)
+
+
+def run_query(query: str, params=None):
+    """Execute a read query and return rows as dictionaries."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, params or ())
+            return cur.fetchall()
     finally:
         conn.close()
 
 
-def get_engine():
-    """Return a SQLAlchemy engine for Lakebase."""
-    return create_engine(_lakebase_url())
-
-
-def run_query(sql: str, params: tuple | dict | None = None) -> list[dict]:
-    """Run a read query against Lakebase and return rows as list[dict]."""
-    with get_connection() as conn:
+def run_write(query: str, params=None):
+    """Execute an INSERT, UPDATE, or DDL statement and commit changes."""
+    conn = get_connection()
+    try:
         with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchall()
-
-
-def run_write(sql: str, params: tuple | dict | None = None) -> int:
-    """Run an INSERT/UPDATE/DELETE against Lakebase, return affected row count."""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            conn.commit()
-            return cur.rowcount
+            cur.execute(query, params or ())
+        conn.commit()
+    finally:
+        conn.close()

@@ -1,51 +1,56 @@
 """
-One-time setup script: creates the Databricks secret scope and stores the
-Massive API key. Run this locally (with the Databricks CLI configured) or
-from a notebook - never commit the resulting secret value anywhere.
-
-Usage:
-    python setup_secrets.py
+Setup script to configure required secret scope and credentials in Databricks.
 """
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.service import workspace
+
+import os
 import getpass
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import ResourceAlreadyExists
 
-w = WorkspaceClient()
+SCOPE_NAME = "database"
 
-w.secrets.create_scope(scope="massive")
-w.secrets.put_secret(
-    scope="massive",
-    key="api-key",
-    string_value=getpass.getpass("Paste your Massive API key: ")
-)
 
-w.secrets.create_scope(scope="database")
-w.secrets.put_secret(
-    scope="database",
-    key="alpaca-key-id",
-    string_value=getpass.getpass("Paste your key id ")
-)
+def setup_secrets():
+    w = WorkspaceClient()
 
-w.secrets.put_secret(
-    scope="database",
-    key="alpaca-secret-key",
-    string_value=getpass.getpass("Paste secret key ")
-)
+    # 1. Create secret scope if it doesn't already exist
+    try:
+        w.secrets.create_scope(scope=SCOPE_NAME)
+        print(f"✓ Secret scope '{SCOPE_NAME}' created.")
+    except ResourceAlreadyExists:
+        print(f"✓ Secret scope '{SCOPE_NAME}' already exists.")
+    except Exception as e:
+        print(f"Scope creation note: {e}")
 
-w.secrets.put_secret(
-    scope="database",
-    key="lakebase-url",
-    string_value=getpass.getpass("Paste your lakebase url")
-)
+    # 2. Collect credentials
+    lakebase_url = os.getenv("LAKEBASE_URL")
+    if not lakebase_url:
+        lakebase_url = getpass.getpass("Enter Lakebase Database URL (press Enter to skip if already set): ").strip()
 
-w.secrets.put_acl(
-    scope="database",
-    principal="users",
-    permission=workspace.AclPermission.READ,
-)
+    tmdb_token = os.getenv("TMDB_TOKEN")
+    if not tmdb_token:
+        tmdb_token = getpass.getpass("Enter TMDB API Read Access Token (v4): ").strip()
 
-w.secrets.put_acl(
-    scope="massive",
-    principal="users",
-    permission=workspace.AclPermission.READ,
-)
+    # 3. Store Lakebase URL
+    if lakebase_url:
+        w.secrets.put_secret(
+            scope=SCOPE_NAME,
+            key="lakebase-url",
+            string_value=lakebase_url
+        )
+        print("✓ Secret 'lakebase-url' stored successfully.")
+
+    # 4. Store TMDB Read Access Token
+    if tmdb_token:
+        w.secrets.put_secret(
+            scope=SCOPE_NAME,
+            key="tmdb-token",
+            string_value=tmdb_token
+        )
+        print("✓ Secret 'tmdb-token' stored successfully.")
+
+    print("\nAll required secrets are configured in Databricks!")
+
+
+if __name__ == "__main__":
+    setup_secrets()

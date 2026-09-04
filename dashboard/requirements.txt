@@ -1,6 +1,6 @@
-databricks-sdk>=0.30.0
+streamlit>=1.30.0
 psycopg2-binary>=2.9.9
-sqlalchemy>=2.0.30
-flask>=3.0.3
-python-dotenv>=1.0.1
-alpaca-py>=0.33.0
+sqlalchemy>=2.0.0
+databricks-sdk>=0.20.0
+pandas>=2.0.0
+requests>=2.31.0

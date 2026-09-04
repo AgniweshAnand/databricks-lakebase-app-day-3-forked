@@ -16,15 +16,25 @@ from databricks.sdk import WorkspaceClient
 from psycopg2.extras import RealDictCursor
 from sqlalchemy import create_engine
 
-_w = WorkspaceClient()
-
 _SCOPE = os.environ.get("LAKEBASE_SECRET_SCOPE", "database")
 _KEY = os.environ.get("LAKEBASE_SECRET_KEY", "lakebase-url")
+
+# Lazy initialization - don't create client at module import time
+_workspace_client = None
+
+
+def _get_workspace_client():
+    """Get or create the workspace client lazily."""
+    global _workspace_client
+    if _workspace_client is None:
+        _workspace_client = WorkspaceClient()
+    return _workspace_client
 
 
 def _lakebase_url() -> str:
     """Fetch and decode the Lakebase connection URL from the Databricks secret scope."""
-    secret = _w.secrets.get_secret(scope=_SCOPE, key=_KEY)
+    w = _get_workspace_client()
+    secret = w.secrets.get_secret(scope=_SCOPE, key=_KEY)
     return base64.b64decode(secret.value).decode("utf-8")
 
 

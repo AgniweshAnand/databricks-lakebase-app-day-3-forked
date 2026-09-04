@@ -1,17 +1,19 @@
 command:
-  - "python"
+  - "streamlit"
+  - "run"
   - "app.py"
+  - "--server.port"
+  - "8501"
+  - "--server.address"
+  - "0.0.0.0"
+
+resources:
+  - name: requirements
+    source:
+      path: ./requirements.txt
 
 env:
   - name: LAKEBASE_SECRET_SCOPE
     value: "database"
   - name: LAKEBASE_SECRET_KEY
     value: "lakebase-url"
-  - name: PAPER_ACCOUNT_ID
-    value: "agent-bricks-demo"
-  - name: ALPACA_SECRET_SCOPE
-    value: "database"
-  - name: ALPACA_KEY_ID_SECRET_KEY
-    value: "alpaca-key-id"
-  - name: ALPACA_SECRET_KEY_SECRET_KEY
-    value: "alpaca-secret-key"

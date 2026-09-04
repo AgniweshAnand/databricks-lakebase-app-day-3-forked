@@ -1,6 +1,6 @@
 command:
   - "python"
-  - "weather_mcp_server.py"
+  - "movie_mcp_server.py"
 
 resources:
   - name: requirements
@@ -12,3 +12,7 @@ env:
     value: "database"
   - name: LAKEBASE_SECRET_KEY
     value: "lakebase-url"
+  - name: TMDB_SECRET_SCOPE
+    value: "database"
+  - name: TMDB_SECRET_KEY
+    value: "tmdb-token"
